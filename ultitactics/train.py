@@ -87,9 +87,9 @@ def evaluate(model: VerticalStackGNN, ds: Dataset) -> dict[str, float]:
 def train(
     n_train: int = 3000,
     n_test: int = 800,
-    epochs: int = 30,
+    epochs: int = 40,
     batch_size: int = 256,
-    lr: float = 2e-3,
+    lr: float = 1e-3,
     seed: int = 0,
 ) -> dict[str, float]:
     rng = np.random.default_rng(seed)

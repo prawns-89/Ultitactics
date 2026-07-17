@@ -63,10 +63,28 @@ class DenseGATv2Layer(nn.Module):
         # Attention vector `a` per head (Eq. 4).
         self.att = nn.Parameter(torch.empty(1, heads, out_dim))
         self.lin_val = nn.Linear(in_dim, heads * out_dim)
+        # ROOT / SELF connection. This is the `h_u^(t-1)` argument of phi in
+        # TacticAI Eq. 3 -- the node's own previous state, kept separate from the
+        # neighbour aggregate. It is NOT optional on a fully-connected graph:
+        # every node has the identical neighbourhood {all nodes}, so the only
+        # thing distinguishing node i's output is its attention weights. If
+        # attention drifts toward uniform, out_i = mean_j(val_j) becomes the same
+        # vector for every node, every later layer then sees node-independent
+        # input, and the whole encoder collapses to a constant. That collapse is
+        # a self-reinforcing fixed point and it is exactly what happens without
+        # this term. The root connection guarantees node identity always
+        # survives a layer.
+        self.lin_root = nn.Linear(in_dim, heads * out_dim)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        for lin in (self.lin_src, self.lin_dst, self.lin_edge, self.lin_val):
+        for lin in (
+            self.lin_src,
+            self.lin_dst,
+            self.lin_edge,
+            self.lin_val,
+            self.lin_root,
+        ):
             nn.init.xavier_uniform_(lin.weight)
             nn.init.zeros_(lin.bias)
         nn.init.xavier_uniform_(self.att)
@@ -89,13 +107,15 @@ class DenseGATv2Layer(nn.Module):
         alpha = torch.softmax(scores, dim=2)  # normalise over neighbours j
         # Weighted sum of neighbour values.
         out = torch.einsum("bijh,bjhd->bihd", alpha, val)  # [B, N, H, D]
+        # phi(h_u^(t-1), aggregate): add the root term so node identity survives.
+        out = out + self.lin_root(x).view(B, N, H, D)
         return out.reshape(B, N, H * D)
 
 
 class VerticalStackGNN(nn.Module):
     """Full encoder + heads, with D_2 frame averaging wrapped around the encoder."""
 
-    def __init__(self, hidden: int = 32, heads: int = 8, layers: int = 3):
+    def __init__(self, hidden: int = 128, heads: int = 8, layers: int = 4):
         super().__init__()
         self.encoder = nn.ModuleList()
         in_dim = graph.NODE_DIM
